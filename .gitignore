@@ -1,2 +1,5 @@
 /target
 measurements.txt
+perf.data*
+profile.json.gz
+flamegraph.svg
