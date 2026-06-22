@@ -15,21 +15,20 @@ fn main() -> std::io::Result<()> {
     for line in reader.lines() {
         let line2 = line?;
         let mut line_content = line2.split(';');
-        let name = line_content.next().unwrap();
+        let name = line_content.next().unwrap().to_string();
         let temp = line_content.next().unwrap().parse::<f32>().unwrap();
-        if let Some(t) = map.get(name) {
-            map.insert(
-                name.to_string(),
-                (
-                    if t.0 > temp { temp } else { t.0 },
-                    t.1 + temp,
-                    if t.2 < temp { temp } else { t.2 },
-                    t.3 + 1,
-                ),
-            );
-        } else {
-            map.insert(name.to_string(), (temp, temp, temp, 1));
-        }
+
+        map.entry(name)
+            .and_modify(|t| {
+                if temp < t.0 {
+                    t.0 = temp;
+                } else if temp > t.2 {
+                    t.2 = temp;
+                }
+                t.1 += temp;
+                t.3 += 1;
+            })
+            .or_insert((temp, temp, temp, 1));
     }
 
     let mut vec = map.into_iter().collect::<Vec<_>>();
