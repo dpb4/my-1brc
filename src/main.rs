@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::HashMap,
     fs::File,
     io::{BufRead, BufReader},
     time::Instant,
@@ -8,9 +8,9 @@ use std::{
 fn main() -> std::io::Result<()> {
     let beginning = Instant::now();
     let f = File::open("measurements.txt")?;
-    let mut reader = BufReader::new(f);
+    let reader = BufReader::new(f);
 
-    let mut map: BTreeMap<String, (f32, f32, f32, usize)> = BTreeMap::new();
+    let mut map: HashMap<String, (f32, f32, f32, usize)> = HashMap::with_capacity(10000);
 
     for line in reader.lines() {
         let line2 = line?;
@@ -32,9 +32,12 @@ fn main() -> std::io::Result<()> {
         }
     }
 
+    let mut vec = map.into_iter().collect::<Vec<_>>();
+    vec.sort_by(|(s1, _), (s2, _)| s1.cmp(s2));
+
     let elapsed = beginning.elapsed();
 
-    for (name, (min, sum, max, count)) in map {
+    for (name, (min, sum, max, count)) in vec {
         println!("{}={:.1}/{:.1}/{:.1}", name, min, sum / (count as f32), max);
     }
 
