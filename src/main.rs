@@ -1,34 +1,55 @@
-use std::{
-    collections::HashMap,
-    fs::File,
-    io::{BufRead, BufReader},
-    time::Instant,
-};
+use std::{collections::HashMap, fs::File, time::Instant};
+
+use memchr::memchr_iter;
+use memmap2::Mmap;
 
 fn main() -> std::io::Result<()> {
     let beginning = Instant::now();
-    let f = File::open("measurements.txt")?;
-    let reader = BufReader::new(f);
+
+    let file = File::open("measurements.txt")?;
+
+    // SAFETY: this could be UB if an external process edits the file or somehow messes with it
+    //
+    //         assumption: that will not happen
+    let mapped_file = unsafe { Mmap::map(&file)? };
 
     let mut map: HashMap<String, (f32, f32, f32, usize)> = HashMap::with_capacity(10000);
 
-    for line in reader.lines() {
-        let line2 = line?;
-        let mut line_content = line2.split(';');
-        let name = line_content.next().unwrap().to_string();
-        let temp = line_content.next().unwrap().parse::<f32>().unwrap();
+    let mut start_byte = 0;
 
-        map.entry(name)
-            .and_modify(|t| {
-                if temp < t.0 {
-                    t.0 = temp;
-                } else if temp > t.2 {
-                    t.2 = temp;
-                }
-                t.1 += temp;
-                t.3 += 1;
-            })
-            .or_insert((temp, temp, temp, 1));
+    for end_byte in memchr_iter(b'\n', &mapped_file) {
+        let line_bytes = &mapped_file[start_byte..end_byte];
+        let semicolon = memchr_iter(b';', line_bytes).next().unwrap();
+
+        // SAFETY: if semicolon was not a valid offset into line_bytes, could be UB
+        //         if the line contained invalid utf-8, it would not be caught
+        //         if the float was invalid, this would be UB
+        //
+        //         safe: every input line is guaranteed to have 1 semicolon followed by a float,
+        //               and every line is valid utf-8
+        let (city, temperature) = unsafe {
+            let (city_bytes, temperature_bytes) = line_bytes.split_at_unchecked(semicolon);
+            (
+                str::from_utf8_unchecked(city_bytes),
+                str::from_utf8_unchecked(&temperature_bytes[1..]) // ignore the first char which is ';'
+                    .parse()
+                    .unwrap_unchecked(),
+            )
+        };
+
+        if let Some(t) = map.get_mut(city) {
+            if temperature < t.0 {
+                t.0 = temperature;
+            } else if temperature > t.2 {
+                t.2 = temperature;
+            }
+            t.1 += temperature;
+            t.3 += 1;
+        } else {
+            map.insert(city.to_string(), (temperature, temperature, temperature, 1));
+        }
+
+        start_byte = end_byte + 1;
     }
 
     let mut vec = map.into_iter().collect::<Vec<_>>();
