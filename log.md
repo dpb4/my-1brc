@@ -37,4 +37,24 @@ I won't pretend to understand how it works on the backend, but this crate *feels
 #### Using `memchr`
 Even after reading lines from the file, each line needed to be parsed to extract the city name and reported temperature. I was using built in str splitting functions, but that was too slow, and overcomplicated for my needs. The solution is the `memchr` crate. It is very limited in functionality, but it makes up for that with its excellent performance. It basically just searches through `[u8]`s for a given byte. That's about 90% of the functionality. But it is *hyper* optimized, and it can search extremely quickly. This is perfect because, since getting rid of the calls to `read_lines()`, the input data is no longer automatically split into lines, so searching for `\n` characters is a requirement.
 
+- File loading and line splitting is super fast now
 - The time is now dominated by hashmap lookups (the hashing part) and `f32` parsing
+
+### V2.1 (19.903s)
+
+- Rust's `ahash` crate purports to be the fastest hashmap in rust, specifically having fast String hashing (which I need) so I swapped that in in place of the standard `HashMap`
+
+#### Float parsing
+Float parsing is a harder problem than it seems. Imagine trying to parse a float the naive way, something like this:
+`"12.34" -> (1 * 10.0) + (2 * 1.0) + (3 * 0.1) + (4 * 0.01) = 12.34_f32`
+This actually doesn't work, at least not in the general case. The issue isn't clear with this example, but as the number has more and more significant digits, sometimes there is a binary encoding which is *closer* to the intended mathematical value than the one you'd get by adding the digits.
+
+In our case however, we don't need to parse arbitrary floating point values. In fact the numbers we parse are a very small subset of floats, ranging from about -40.0 to 40.0, and all with exactly 1 decimal place. Doing full blown float parsing (like `str::parse::<f32>()` does) is way overkill for our code, so we can optimize this significantly.
+
+My first approach was to implement the naive algorithm I showed above, just going across each digit. This is alright, but looping over every digit and accumulating a value still has too much overhead. Since we know that every value either has 2 or 3 digits (and possibly a negative sign) we can unroll this to speed things up further. Just using an if statement over the length of the bytes means we can split it into two linear branches.
+
+#### Avoiding (float) arithmetic
+
+Since the values used really are so limited (only about 500 unique values, ignoring negatives) I decided to try a lookup table. This is the kind of optimization which is highly situational, and really needs to be benchmarked. Between a couple floating point multiplications vs a couple integer multiplications then a memory read, theres no clear winner. Thankfully in my case it did make a difference. By treating every decimal as an index (eg. `10.5 -> FLOATS\[105\]`) I could immediately find exact floating point representations.
+
+These optimizations together brought the time down to 19.903 seconds, which is a good improvement. Now the float parsing only takes 5-10% of the total time (as opposed to ~30% before).

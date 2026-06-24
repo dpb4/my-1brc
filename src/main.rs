@@ -1,7 +1,10 @@
-use std::{collections::HashMap, fs::File, time::Instant};
+use std::{fs::File, time::Instant};
 
+use ahash::AHashMap;
 use memchr::memchr_iter;
 use memmap2::Mmap;
+
+mod float_lookup;
 
 fn main() -> std::io::Result<()> {
     let beginning = Instant::now();
@@ -13,7 +16,7 @@ fn main() -> std::io::Result<()> {
     //         assumption: that will not happen
     let mapped_file = unsafe { Mmap::map(&file)? };
 
-    let mut map: HashMap<String, (f32, f32, f32, usize)> = HashMap::with_capacity(10000);
+    let mut map: AHashMap<String, (f32, f32, f32, usize)> = AHashMap::with_capacity(10000);
 
     let mut start_byte = 0;
 
@@ -31,9 +34,7 @@ fn main() -> std::io::Result<()> {
             let (city_bytes, temperature_bytes) = line_bytes.split_at_unchecked(semicolon);
             (
                 str::from_utf8_unchecked(city_bytes),
-                str::from_utf8_unchecked(&temperature_bytes[1..]) // ignore the first char which is ';'
-                    .parse()
-                    .unwrap_unchecked(),
+                float_lookup::float_lookup(&temperature_bytes[1..]), // ignore the first char which is ';'
             )
         };
 
@@ -65,3 +66,30 @@ fn main() -> std::io::Result<()> {
 
     Ok(())
 }
+
+// #[inline(always)]
+// #[rustfmt::skip]
+// fn parse_temperature(bytes: &[u8]) -> f32 {
+//     match *bytes {
+//         // one digit
+//                  [o, _, d] =>   ( 1.0 * u8_to_f32(o)) +
+//                                 ( 0.1 * u8_to_f32(d)),
+//         // negative one digit
+//         [b'-',    o, _, d] => -(( 1.0 * u8_to_f32(o)) +
+//                                 ( 0.1 * u8_to_f32(d))),
+//         // two digit
+//               [t, o, _, d] =>   (10.0 * u8_to_f32(t)) +
+//                                 ( 1.0 * u8_to_f32(o)) +
+//                                 ( 0.1 * u8_to_f32(d)),
+//         // negative two digit
+//         [b'-', t, o, _, d] => -((10.0 * u8_to_f32(t)) +
+//                                 ( 1.0 * u8_to_f32(o)) +
+//                                 ( 0.1 * u8_to_f32(d))),
+//         _ => unreachable!(),
+//     }
+// }
+
+// #[inline(always)]
+// fn u8_to_f32(byte: u8) -> f32 {
+//     (byte - b'0') as f32
+// }
