@@ -16,7 +16,7 @@ fn main() -> std::io::Result<()> {
     //         assumption: that will not happen
     let mapped_file = unsafe { Mmap::map(&file)? };
 
-    let mut map: AHashMap<String, (f32, f32, f32, usize)> = AHashMap::with_capacity(10000);
+    let mut map: AHashMap<String, (i32, i32, i32, usize)> = AHashMap::with_capacity(10000);
 
     let mut start_byte = 0;
 
@@ -34,7 +34,8 @@ fn main() -> std::io::Result<()> {
             let (city_bytes, temperature_bytes) = line_bytes.split_at_unchecked(semicolon);
             (
                 str::from_utf8_unchecked(city_bytes),
-                float_lookup::float_lookup(&temperature_bytes[1..]), // ignore the first char which is ';'
+                parse_temperature_as_int(&temperature_bytes[1..]),
+                // float_lookup::float_lookup(&temperature_bytes[1..]), // ignore the first char which is ';'
             )
         };
 
@@ -44,10 +45,13 @@ fn main() -> std::io::Result<()> {
             } else if temperature > t.2 {
                 t.2 = temperature;
             }
-            t.1 += temperature;
+            t.1 += temperature as i32;
             t.3 += 1;
         } else {
-            map.insert(city.to_string(), (temperature, temperature, temperature, 1));
+            map.insert(
+                city.to_string(),
+                (temperature, temperature as i32, temperature, 1),
+            );
         }
 
         start_byte = end_byte + 1;
@@ -55,11 +59,21 @@ fn main() -> std::io::Result<()> {
 
     let mut vec = map.into_iter().collect::<Vec<_>>();
     vec.sort_by(|(s1, _), (s2, _)| s1.cmp(s2));
+    let vec = vec.iter_mut().map(|(s, (min, sum, max, count))| {
+        (
+            s,
+            (
+                *min as f32 * 0.1,
+                (*sum as f32) / (*count as f32) * 0.1,
+                *max as f32 * 0.1,
+            ),
+        )
+    });
 
     let elapsed = beginning.elapsed();
 
-    for (name, (min, sum, max, count)) in vec {
-        println!("{}={:.1}/{:.1}/{:.1}", name, min, sum / (count as f32), max);
+    for (name, (min, mean, max)) in vec {
+        println!("{}={:.1}/{:.1}/{:.1}", name, min, mean, max);
     }
 
     println!("TIME TAKEN: {:.3} seconds", elapsed.as_secs_f32());
@@ -67,6 +81,22 @@ fn main() -> std::io::Result<()> {
     Ok(())
 }
 
+#[inline(always)]
+fn parse_temperature_as_int(mut bytes: &[u8]) -> i32 {
+    let mut neg = false;
+    if bytes[0] == b'-' {
+        neg = true;
+        bytes = &bytes[1..]
+    }
+    let len = bytes.len();
+
+    let mut parsed = bytes[len - 1] as i32 + (bytes[len - 3] as i32) * 10;
+    if len > 3 {
+        parsed += bytes[len - 4] as i32 * 100;
+    }
+
+    if neg { -parsed } else { parsed }
+}
 // #[inline(always)]
 // #[rustfmt::skip]
 // fn parse_temperature(bytes: &[u8]) -> f32 {
