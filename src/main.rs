@@ -4,8 +4,6 @@ use ahash::AHashMap;
 use memchr::memchr_iter;
 use memmap2::Mmap;
 
-mod float_lookup;
-
 fn main() -> std::io::Result<()> {
     let beginning = Instant::now();
 
@@ -15,6 +13,7 @@ fn main() -> std::io::Result<()> {
     //
     //         assumption: that will not happen
     let mapped_file = unsafe { Mmap::map(&file)? };
+    let _ = mapped_file.advise(memmap2::Advice::Sequential);
 
     let mut map: AHashMap<String, (i32, i32, i32, usize)> = AHashMap::with_capacity(10000);
 
@@ -22,7 +21,19 @@ fn main() -> std::io::Result<()> {
 
     for end_byte in memchr_iter(b'\n', &mapped_file) {
         let line_bytes = &mapped_file[start_byte..end_byte];
-        let semicolon = memchr_iter(b';', line_bytes).next().unwrap();
+
+        let semicolon = {
+            let len = line_bytes.len();
+            if line_bytes[len - 4] == b';' {
+                len - 4
+            } else if line_bytes[len - 5] == b';' {
+                len - 5
+            } else if line_bytes[len - 6] == b';' {
+                len - 6
+            } else {
+                panic!("bad semicolon :(")
+            }
+        };
 
         // SAFETY: if semicolon was not a valid offset into line_bytes, could be UB
         //         if the line contained invalid utf-8, it would not be caught
@@ -35,7 +46,6 @@ fn main() -> std::io::Result<()> {
             (
                 str::from_utf8_unchecked(city_bytes),
                 parse_temperature_as_int(&temperature_bytes[1..]),
-                // float_lookup::float_lookup(&temperature_bytes[1..]), // ignore the first char which is ';'
             )
         };
 
@@ -90,9 +100,9 @@ fn parse_temperature_as_int(mut bytes: &[u8]) -> i32 {
     }
     let len = bytes.len();
 
-    let mut parsed = bytes[len - 1] as i32 + (bytes[len - 3] as i32) * 10;
+    let mut parsed = (bytes[len - 1] - b'0') as i32 + ((bytes[len - 3] - b'0') as i32) * 10;
     if len > 3 {
-        parsed += bytes[len - 4] as i32 * 100;
+        parsed += (bytes[len - 4] - b'0') as i32 * 100;
     }
 
     if neg { -parsed } else { parsed }

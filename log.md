@@ -58,3 +58,10 @@ My first approach was to implement the naive algorithm I showed above, just goin
 Since the values used really are so limited (only about 500 unique values, ignoring negatives) I decided to try a lookup table. This is the kind of optimization which is highly situational, and really needs to be benchmarked. Between a couple floating point multiplications vs a couple integer multiplications then a memory read, theres no clear winner. Thankfully in my case it did make a difference. By treating every decimal as an index (eg. `10.5 -> FLOATS\[105\]`) I could immediately find exact floating point representations.
 
 These optimizations together brought the time down to 19.903 seconds, which is a good improvement. Now the float parsing only takes 5-10% of the total time (as opposed to ~30% before).
+
+### V2.2 (15.581s)
+I decided to avoid floats altogether, as much as possible. So instead of using "10.5", I just use 105. At the very last step when I calculate the average, I divide all the numbers by 10 to recover the floats.
+
+Another small optimization is to do with `memmap2`; there is a method `advise()` which gives a hint to the kernel about how the file will be used. In this case I gave the hint "Sequential" which tells the kernel that I intend to read the file start to finish, and only once. It can then aggressively read ahead and drop old segments of the file.
+
+The last small optimization was to do with semicolon parsing. Previously I was using `memchr` to search for newlines, then within each line using `memchr` again to search for a semicolon. This is overkill, however, since the semicolon is always 3-5 characters from the end of the line, so I replaced it with an if statement just checking each possibility. 
