@@ -65,3 +65,22 @@ I decided to avoid floats altogether, as much as possible. So instead of using "
 Another small optimization is to do with `memmap2`; there is a method `advise()` which gives a hint to the kernel about how the file will be used. In this case I gave the hint "Sequential" which tells the kernel that I intend to read the file start to finish, and only once. It can then aggressively read ahead and drop old segments of the file.
 
 The last small optimization was to do with semicolon parsing. Previously I was using `memchr` to search for newlines, then within each line using `memchr` again to search for a semicolon. This is overkill, however, since the semicolon is always 3-5 characters from the end of the line, so I replaced it with an if statement just checking each possibility. 
+
+## V3.0 (1.098s) -- going parallel
+
+Having optimized it as much as I could from ~120s to ~15s, only one path remained. Parallelism. The code was fast, but only using 1/24th of my processor's capabilities. Parallelism is hard though, and full of footguns, so I had to restructure the code a bit.
+
+### Rust's `rayon` crate
+`rayon` is another phenomenal crate which makes parallelizing code quite easy. In many cases it's practically just a drop-in replacement for iterators which allow for instant speed ups. If you are working with nearly any kind of built in iterator, rayon can automatically parallelize it with `.into_par_iter()` and it just works. The problem comes when working with custom iterator types, such as `memchr::Memchr` as I'm using. `rayon` *cannot* automatically parallelize it, so some manual work is involved.
+
+### Chunking
+The short answer is that there's no easy way to use the `memchr_iter` functionality but make it parallel. Instead, we need to parallelize the work *then* use `memchr_iter` on each thread. This means the data needs to be split up somehow so each thread can work on a chunk at a time. There are two problems here. Firstly, loading chunks of data. Secondly, making sure each chunk is valid.
+
+The first problem is trivial thanks to the glorious `memmap2` crate. To the programmer, it seems as though the entire file is loaded into memory, so we can very easily just access the byte array and take various slices of it. The backend work of loading each chunk when it needs to be loaded is delegated to the kernel.
+
+The second problem requires a bit more thought. The reason this is an issue is that the data is partitioned by line. If we just take chunks of say, 32 MiB, the chunk is *not* guaranteed to begin or end on a line boundary, which means it could have lines that are cut in half. The solution is to first naively partition the data, then scooch the boundaries to align with newline characters. Because the chunks of data are so large, the scooching is a trivial cost. Not only that, but with the help of our friend `memchr` we can search for newlines at the beginning and end of chunks extremely quickly.
+
+### Shared state
+Now that we have a way to load and align chunks of data, we can finally process it in parallel. One problem remains, however. In the single threaded code I just used one `AHashMap` to store the data. If I tried this approach with multiple threads, I would have to wrap it in an `Arc` or `Mutex` or some other synchronization primitive. That is very bad. Considering that threads will access the map a collective billion times, contesting for the lock on the hashmap would murder performance because only one thread could touch it at a time. There's no general solution to this issue, it depends on the problem space. In our case, thankfully, we can give each thread its *own* `AHashMap` and just do a union at the end. Since the number of threads is <= 24 and the union operation is quite simple, this is trivial in terms of computation. Another important property of the problem in this case is that it is completely associative; it doesn't matter what order we process the lines in then merge the maps in, because the only operations involved are `min`s, `max`s, and addition. If this weren't the case, each thread having its own map may not work.
+
+I'm very happy with the result of this challenge, I really wasn't sure how well I'd be able to optimize it. I haven't really written high performance code like this. I knew the best results online were ~1 second, so I'm glad I was able to match that (at least on my system). I intend to snoop around and see what other people did, and maybe I can come back and make some further improvements to my own code.

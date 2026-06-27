@@ -3,6 +3,10 @@ use std::{fs::File, time::Instant};
 use ahash::AHashMap;
 use memchr::memchr_iter;
 use memmap2::Mmap;
+use rayon::prelude::*;
+
+const MB: usize = 1024 * 1024;
+const CHUNK_SIZE: usize = 32 * MB;
 
 fn main() -> std::io::Result<()> {
     let beginning = Instant::now();
@@ -13,14 +17,100 @@ fn main() -> std::io::Result<()> {
     //
     //         assumption: that will not happen
     let mapped_file = unsafe { Mmap::map(&file)? };
-    let _ = mapped_file.advise(memmap2::Advice::Sequential);
+    // let _ = mapped_file.advise(memmap2::Advice::Sequential);
 
-    let mut map: AHashMap<String, (i32, i32, i32, usize)> = AHashMap::with_capacity(10000);
+    let map = (0..mapped_file.len())
+        .step_by(CHUNK_SIZE)
+        .collect::<Vec<_>>()
+        .into_par_iter()
+        .map(|start| {
+            // this will ensure every chunk starts and ends on line boundaries
+            let end = adjust_end(&mapped_file, start + CHUNK_SIZE);
+            let start = adjust_start(&mapped_file, start);
+            process_chunk(&mapped_file[start..end])
+        })
+        .reduce(
+            || AHashMap::new(),
+            |mut m1, m2| {
+                merge_maps(&mut m1, m2);
+                m1
+            },
+        );
+
+    let mut vec = map.into_iter().collect::<Vec<_>>();
+    vec.sort_by(|(s1, _), (s2, _)| s1.cmp(s2));
+    let vec = vec.iter_mut().map(|(s, (min, sum, max, count))| {
+        (
+            s,
+            (
+                *min as f32 * 0.1,
+                (*sum as f32) / (*count as f32) * 0.1,
+                *max as f32 * 0.1,
+            ),
+        )
+    });
+
+    let elapsed = beginning.elapsed();
+
+    for (name, (min, mean, max)) in vec {
+        println!("{}={:.1}/{:.1}/{:.1}", name, min, mean, max);
+    }
+
+    println!("TIME TAKEN: {:.3} seconds", elapsed.as_secs_f32());
+
+    Ok(())
+}
+
+#[inline(always)]
+fn parse_temperature_as_int(mut bytes: &[u8]) -> i32 {
+    let mut neg = false;
+    if bytes[0] == b'-' {
+        neg = true;
+        bytes = &bytes[1..]
+    }
+    let len = bytes.len();
+
+    let mut parsed = (bytes[len - 1] - b'0') as i32 + ((bytes[len - 3] - b'0') as i32) * 10;
+    if len > 3 {
+        parsed += (bytes[len - 4] - b'0') as i32 * 100;
+    }
+
+    if neg { -parsed } else { parsed }
+}
+
+fn adjust_start(bytes: &[u8], start: usize) -> usize {
+    if start == 0 {
+        return 0;
+    }
+
+    if bytes[start - 1] == b'\n' {
+        return start;
+    }
+
+    match memchr::memchr(b'\n', &bytes[start..]) {
+        Some(i) => start + i + 1,
+        None => bytes.len(), // no complete lines remain
+    }
+}
+
+fn adjust_end(bytes: &[u8], end: usize) -> usize {
+    if end >= bytes.len() {
+        return bytes.len();
+    }
+
+    match memchr::memchr(b'\n', &bytes[end..]) {
+        Some(i) => end + i,
+        None => bytes.len(),
+    }
+}
+
+fn process_chunk(chunk: &[u8]) -> AHashMap<String, (i32, i32, i32, usize)> {
+    let mut map: AHashMap<String, (i32, i32, i32, usize)> = AHashMap::new();
 
     let mut start_byte = 0;
 
-    for end_byte in memchr_iter(b'\n', &mapped_file) {
-        let line_bytes = &mapped_file[start_byte..end_byte];
+    for end_byte in memchr_iter(b'\n', chunk) {
+        let line_bytes = &chunk[start_byte..end_byte];
 
         let semicolon = {
             let len = line_bytes.len();
@@ -66,46 +156,26 @@ fn main() -> std::io::Result<()> {
 
         start_byte = end_byte + 1;
     }
-
-    let mut vec = map.into_iter().collect::<Vec<_>>();
-    vec.sort_by(|(s1, _), (s2, _)| s1.cmp(s2));
-    let vec = vec.iter_mut().map(|(s, (min, sum, max, count))| {
-        (
-            s,
-            (
-                *min as f32 * 0.1,
-                (*sum as f32) / (*count as f32) * 0.1,
-                *max as f32 * 0.1,
-            ),
-        )
-    });
-
-    let elapsed = beginning.elapsed();
-
-    for (name, (min, mean, max)) in vec {
-        println!("{}={:.1}/{:.1}/{:.1}", name, min, mean, max);
-    }
-
-    println!("TIME TAKEN: {:.3} seconds", elapsed.as_secs_f32());
-
-    Ok(())
+    map
 }
 
-#[inline(always)]
-fn parse_temperature_as_int(mut bytes: &[u8]) -> i32 {
-    let mut neg = false;
-    if bytes[0] == b'-' {
-        neg = true;
-        bytes = &bytes[1..]
+fn merge_maps(
+    m1: &mut AHashMap<String, (i32, i32, i32, usize)>,
+    m2: AHashMap<String, (i32, i32, i32, usize)>,
+) {
+    for (city, vals) in m2.into_iter() {
+        if let Some(m1_temp) = m1.get_mut(&city) {
+            if vals.0 < m1_temp.0 {
+                m1_temp.0 = vals.0;
+            } else if vals.2 > m1_temp.2 {
+                m1_temp.2 = vals.2;
+            }
+            m1_temp.1 += vals.1;
+            m1_temp.3 += vals.3;
+        } else {
+            m1.insert(city, vals);
+        }
     }
-    let len = bytes.len();
-
-    let mut parsed = (bytes[len - 1] - b'0') as i32 + ((bytes[len - 3] - b'0') as i32) * 10;
-    if len > 3 {
-        parsed += (bytes[len - 4] - b'0') as i32 * 100;
-    }
-
-    if neg { -parsed } else { parsed }
 }
 // #[inline(always)]
 // #[rustfmt::skip]

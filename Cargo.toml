@@ -7,6 +7,7 @@ edition = "2024"
 ahash = "0.8.12"
 memchr = "2.8.2"
 memmap2 = "0.9.11"
+rayon = "1.12.0"
 
 [profile.profiling]
 inherits = "release"
